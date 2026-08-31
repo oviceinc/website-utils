@@ -86,6 +86,12 @@ Two families of parameters are involved.
 Both families are persisted in `localStorage` and re-applied when the visitor navigates
 to a form, so they survive navigation within the site.
 
+They differ in coverage, which is why both exist. `mark_source` is derived from the
+referrer when no explicit value arrives, so **every** visit carries one. `utm_*` only
+exists when someone tagged the inbound link, so organic, direct and referral traffic
+has none. `utm_*` in exchange carries campaign-level detail that the coded
+`mark_source` values cannot express.
+
 ### `localStorage` keys
 
 | Key | Contents |
