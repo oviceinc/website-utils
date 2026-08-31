@@ -106,9 +106,22 @@ This is intended for testing.
 
 - `utm_*` values are replaced as a set. If any `utm_*` parameter arrives, all five are
   replaced, so values from different campaigns are never mixed. `gclid` is independent.
-- Parameters already present in the current page's URL are not appended a second time.
-- Safari's storage policies can evict `localStorage` well before the 30 day expiry, so
-  30 days is an upper bound rather than a guarantee.
+  The flip side: tagging an **internal** link with only part of a set (say
+  `?utm_content=hero`) discards the acquisition source. Keep `utm_*` for inbound links.
+- `utm_*` and `gclid` are not appended when the key is already present, either in the
+  current page's URL or hardcoded on the link being clicked. In the latter case the
+  value on the link wins. **`mark_*` has no such check** — a page URL already carrying
+  `mark_source` produces it twice on the form link. Long-standing behaviour.
+- A form link whose `href` contains a fragment (`...form#top`) gets the parameters
+  appended after the fragment, where the server never sees them. Long-standing
+  behaviour; avoid fragments on links to the form destinations.
+- Handlers are bound at DOM ready, so links inserted later by other scripts (widgets,
+  banners) do not get parameters.
+- Storage policies can evict `localStorage` well before the 30 day expiry, so 30 days is
+  an upper bound rather than a guarantee. Safari is the usual case.
+- A failing `localStorage` write is swallowed on purpose. The store is written from a
+  top-level IIFE, and an uncaught throw there would stop the script before the click
+  handler is bound, costing every parameter on the page rather than just the ads record.
 - The script only runs on pages that load it. Traffic that reaches a form directly,
   without passing through the website, carries no attribution.
 
