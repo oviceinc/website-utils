@@ -28,7 +28,7 @@ function readAdsStore() {
   try { o = JSON.parse(raw); } catch (e) { return {}; }
   if (!o || typeof o !== 'object') return {};
   if (!o.ts || (new Date().getTime() - Number(o.ts)) > ads_ttl) {
-    localStorage.removeItem(ads_store);
+    try { localStorage.removeItem(ads_store); } catch (e) {}
     return {};
   }
   return o;
@@ -59,21 +59,29 @@ function storeAdsParams(v) {
   }
   if (changed) {
     cur.ts = new Date().getTime();
-    localStorage.setItem(ads_store, JSON.stringify(cur));
+    // This runs inside the IIFE. An uncaught throw here (a full quota rejecting a
+    // new key, for instance) would stop the script before the click handler is
+    // bound, and every link on the page would lose mark_* as well. Losing the ads
+    // record is the lesser failure.
+    try { localStorage.setItem(ads_store, JSON.stringify(cur)); } catch (e) {}
   }
 }
 
 // Build the utm_* / gclid parameters to append to a form link.
-// Keys already present in the current URL arrive via global_prm, so skip those
-// to avoid appending them twice.
-function retrieveAdsParams() {
+// A key is skipped when it is already present either in the current page's URL
+// (it gets copied over via global_prm) or on the link itself (hardcoded by the
+// site), so that neither source ends up duplicated.
+function retrieveAdsParams(target_url) {
   var o = readAdsStore();
   var all = ads_keys.concat(['gclid']);
+  var qi = target_url.indexOf('?');
+  var tgt = (qi !== -1) ? new URLSearchParams(target_url.slice(qi + 1)) : null;
   var out = [];
   for (var i = 0; i < all.length; i++) {
     var k = all[i];
     if (!o[k]) continue;
     if (global_prm_val && (global_prm_val.get(k) !== null)) continue;
+    if (tgt && (tgt.get(k) !== null)) continue;
     out.push(k + '=' + encodeURIComponent(o[k]));
   }
   return out.join('&');
@@ -232,7 +240,7 @@ $(function(){
             }
             p = true;
           }
-          var ads = retrieveAdsParams();
+          var ads = retrieveAdsParams(target_url);
           if (ads) {
             at = at ? at + '&' + ads : ads;
             p = true;
