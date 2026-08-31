@@ -6,15 +6,38 @@ const path = require('path');
 const SRC = process.argv[2] || '../utils.js';
 const code = fs.readFileSync(path.resolve(__dirname, SRC), 'utf8');
 
-function makeStorage(seed) {
+function makeStorage(seed, opts) {
   const m = new Map(seed || []);
+  const o = opts || {};
   return {
     getItem: k => (m.has(k) ? m.get(k) : null),
-    setItem: (k, v) => m.set(k, String(v)),
+    setItem: (k, v) => {
+      // quota 満杯の実挙動: 既存キーの上書きは通るが、新規キーの追加は throw する
+      if (o.rejectNewKeys && !m.has(k)) {
+        const e = new Error('The quota has been exceeded.');
+        e.name = 'QuotaExceededError';
+        throw e;
+      }
+      m.set(k, String(v));
+    },
     removeItem: k => m.delete(k),
     _dump: () => Object.fromEntries(m),
     _map: m,
   };
+}
+
+// 既存キーが揃っていて quota だけ満杯、という状態を作る。
+// この状態では ovicecom_sAds（新規キー）の書き込みだけが失敗する。
+function makeFullStorage() {
+  return makeStorage([
+    ['ovicecom_utils', '36'],
+    ['ovicecom_cPages', '5'],
+    ['ovicecom_cVisits', '2'],
+    ['ovicecom_sFirstRef', 'seo_go_sea'],
+    ['ovicecom_sLastRef', 'seo_go_sea'],
+    ['ovicecom_attribution', 'seo_go_sea'],
+    ['ovicecom_nLastTime', String(Date.now())],
+  ], { rejectNewKeys: true });
 }
 
 // 1ページ読み込みをシミュレートする。ls は呼び出し間で共有＝サイト内回遊を再現
@@ -177,7 +200,12 @@ console.log('\n[7] 保存から31日経過後');
 {
   const ls = makeStorage();
   loadPage({ ls, search: '?utm_source=A', referrer: 'https://www.google.com/', origin: ORIGIN });
-  const rec = JSON.parse(ls.getItem('ovicecom_sAds'));
+  const raw = ls.getItem('ovicecom_sAds');
+  if (raw === null) {
+    // 036 にはこの機能自体が無い。ここで異常終了させると以降のケースが走らなくなる
+    console.log('  SKIP  ovicecom_sAds が無い（この機能を持たないビルド）');
+  } else {
+  const rec = JSON.parse(raw);
   rec.ts = Date.now() - 31 * 24 * 60 * 60 * 1000;
   ls.setItem('ovicecom_sAds', JSON.stringify(rec));
   const pg2 = loadPage({ ls, search: '', referrer: ORIGIN + '/lp', origin: ORIGIN });
@@ -185,6 +213,7 @@ console.log('\n[7] 保存から31日経過後');
   check('期限切れの utm は付かない', p.utm_source === undefined, JSON.stringify(p));
   check('mark_source は従来どおり付く', !!p.mark_source, JSON.stringify(p));
   check('ストアが削除される', ls.getItem('ovicecom_sAds') === null);
+  }
 }
 
 // --- ケース8: 値のエスケープ ---
@@ -299,6 +328,65 @@ console.log('\n[13] 保存値ありの状態で utm_source を持つページか
   const { p, dup } = paramsOf(pg2.click(SF));
   check('utm_source が1つだけ', dup.utm_source === undefined, JSON.stringify(dup));
   check('現URLの値 NEW が採用される', p.utm_source === 'NEW', JSON.stringify(p));
+}
+
+// --- ケース14: localStorage の quota が満杯（新規キーの書き込みが throw する） ---
+console.log('\n[14] quota 満杯（新規キーが throw）＋ 現URLに utm あり');
+{
+  const ls = makeFullStorage();
+  let err = null, url = null;
+  try {
+    const pg = loadPage({ ls, search: '?utm_source=A', referrer: 'https://www.google.com/', origin: ORIGIN });
+    url = pg.click(SF);
+  } catch (e) { err = e; }
+  check('IIFE が例外で止まらない', err === null, err ? String(err) : '');
+  if (!err) {
+    const { p } = paramsOf(url);
+    check('クリックハンドラが生きていて mark_source が付く', !!p.mark_source, JSON.stringify(p));
+    check('ページカウントが加算される', ls.getItem('ovicecom_cPages') === '6', ls.getItem('ovicecom_cPages'));
+    check('utm は諦める（ストアは書けていない）', p.utm_source === 'A', 'URL経由では付く: ' + JSON.stringify(p));
+  }
+}
+
+// --- ケース15: リンク側に utm がハードコードされている ---
+console.log('\n[15] フォームリンクに utm_source が直書きされている');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '?utm_source=google&utm_medium=cpc', referrer: 'https://www.google.com/', origin: ORIGIN });
+  const pg2 = loadPage({ ls, search: '', referrer: ORIGIN + '/lp', origin: ORIGIN });
+  const { p, dup } = paramsOf(pg2.click(SF + '?utm_source=hardcoded'));
+  check('utm_source が重複しない', dup.utm_source === undefined, JSON.stringify(dup));
+  check('リンク側の値が勝つ', p.utm_source === 'hardcoded', JSON.stringify(p));
+  check('直書きされていない utm_medium は補われる', p.utm_medium === 'cpc', JSON.stringify(p));
+}
+
+// --- ケース16: 同一ページで別々のフォームリンクを順にクリック ---
+console.log('\n[16] 同一ページで別リンクを順にクリック（リンク間の累積）');
+{
+  const ls = makeStorage();
+  const pg = loadPage({ ls, search: '?utm_source=A', referrer: 'https://www.google.com/', origin: ORIGIN });
+  const first = paramsOf(pg.click(SF));
+  const second = paramsOf(pg.click(TRIAL));
+  const again = paramsOf(pg.click(SF));
+  check('1本目に重複なし', Object.keys(first.dup).length === 0, JSON.stringify(first.dup));
+  check('2本目に重複なし', Object.keys(second.dup).length === 0, JSON.stringify(second.dup));
+  check('2本目に1本目の mark_* が漏れない', second.p.mark_source === undefined, JSON.stringify(second.p));
+  check('1本目を再クリックしても重複なし', Object.keys(again.dup).length === 0, JSON.stringify(again.dup));
+}
+
+// --- ケース17: フォームリンクが既にクエリを持つ（& 分岐） ---
+console.log('\n[17] フォームリンクが既存クエリを持つ');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '?utm_source=A', referrer: 'https://www.google.com/', origin: ORIGIN });
+  const pg2 = loadPage({ ls, search: '', referrer: ORIGIN + '/lp', origin: ORIGIN });
+  const url = pg2.click(SF + '?existing=1');
+  const { p, dup } = paramsOf(url);
+  check('既存クエリが保持される', p.existing === '1', JSON.stringify(p));
+  check('utm が付与される', p.utm_source === 'A', JSON.stringify(p));
+  check('mark_source が付与される', !!p.mark_source, JSON.stringify(p));
+  check('重複なし', Object.keys(dup).length === 0, JSON.stringify(dup));
+  check('? が二重にならない', (url.match(/\?/g) || []).length === 1, url);
 }
 
 console.log('\n=== 結果: ' + pass + ' passed, ' + fail + ' failed ===');
