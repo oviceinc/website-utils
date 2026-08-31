@@ -211,7 +211,11 @@ function secdomain(p) {
 
 $(function(){
   $('a').click(function() {
-    var target_url = $(this).attr('href');
+    // The handler rewrites href in place, and the element outlives the click, so a
+    // second click has to rebuild from the original href instead of appending again
+    // (a double-click would otherwise duplicate every parameter).
+    if (!('ovice_base' in this)) {this.ovice_base = $(this).attr('href');}
+    var target_url = this.ovice_base;
     if (!target_url.startsWith('#') && !target_url.startsWith('?')) {
       var at = '';
       var p = false;
