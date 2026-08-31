@@ -54,10 +54,15 @@ function loadPage({ ls, search, referrer, origin }) {
   vm.runInContext(code, sandbox);
   if (readyFn) readyFn();
 
+  // 実ブラウザと同じく <a> 要素はページ内で永続する。
+  // クリックごとに要素を作り直すと、書き換え済み href への再追記を見逃す。
+  const els = new Map();
+
   return {
     // href を持つ擬似 <a> をクリックして書き換え後の href を返す
     click(href) {
-      const el = { href };
+      let el = els.get(href);
+      if (!el) { el = { href }; els.set(href, el); }
       clickHandler.call(el);
       return el.href;
     },
