@@ -1,0 +1,3 @@
+# The served file must always be LF. CRLF creeping in changes what the CDN delivers.
+*.js  text eol=lf
+*.md  text eol=lf
