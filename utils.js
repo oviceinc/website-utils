@@ -1,16 +1,82 @@
-// ovice utils build 036 by Tok@ovice, 2026
-var global_utils = 36;
+// ovice utils build 037
+// builds up to 036 by Tok@ovice, 2024-2026
+// build 037: persist utm_* / gclid in localStorage so they survive navigation
+//            within the site, and stop mutating global_prm in the click handler
+var global_utils = 37;
 var global_prm;
 var global_prm_val;
 const msuid_direct = 'dir_na_non';
 const url_form_trial = 'trial-form';
 const url_form_sf = 'go.ovice.com';
 const url_form_ovice = 'inforea.ch';
+const ads_store = 'ovicecom_sAds';
+const ads_keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+const ads_ttl = 30 * 24 * 60 * 60 * 1000;
 
 function retrieveGETqs() {
   var query = window.location.search.substring(1);
   if (!query) return false;
   return query;
+}
+
+// Read the stored utm_* / gclid. Anything past its expiry is discarded.
+function readAdsStore() {
+  if (typeof localStorage === 'undefined') return {};
+  var raw = localStorage.getItem(ads_store);
+  if (!raw) return {};
+  var o;
+  try { o = JSON.parse(raw); } catch (e) { return {}; }
+  if (!o || typeof o !== 'object') return {};
+  if (!o.ts || (new Date().getTime() - Number(o.ts)) > ads_ttl) {
+    localStorage.removeItem(ads_store);
+    return {};
+  }
+  return o;
+}
+
+// Store utm_* / gclid when the current page URL carries them.
+// utm_* is replaced as a set so values from different campaigns never mix.
+// gclid is overwritten independently, since ad links may carry it on its own.
+function storeAdsParams(v) {
+  if (typeof localStorage === 'undefined') return;
+  var cur = readAdsStore();
+  var changed = false;
+  var utm = {};
+  var i;
+  for (i = 0; i < ads_keys.length; i++) {
+    var val = v.get(ads_keys[i]);
+    if (val !== null && val !== '') {utm[ads_keys[i]] = val;}
+  }
+  if (Object.keys(utm).length > 0) {
+    for (i = 0; i < ads_keys.length; i++) {delete cur[ads_keys[i]];}
+    for (var k in utm) {cur[k] = utm[k];}
+    changed = true;
+  }
+  var g = v.get('gclid');
+  if ((g !== null) && (g !== '')) {
+    cur.gclid = g;
+    changed = true;
+  }
+  if (changed) {
+    cur.ts = new Date().getTime();
+    localStorage.setItem(ads_store, JSON.stringify(cur));
+  }
+}
+
+// Build the utm_* / gclid parameters to append to a form link.
+// Keys already present in the current URL arrive via global_prm, so skip those
+// to avoid appending them twice.
+function retrieveAdsParams() {
+  var o = readAdsStore();
+  var all = ads_keys.concat(['gclid']);
+  var out = [];
+  for (var i = 0; i < all.length; i++) {
+    var k = all[i];
+    if (!o[k]) continue;
+    if (global_prm_val && (global_prm_val.get(k) !== null)) continue;
+    out.push(k + '=' + encodeURIComponent(o[k]));
+  }
+  return out.join('&');
 }
 
 function checkAttribution(d) {
@@ -86,7 +152,11 @@ function secdomain(p) {
 
 (function(){
   var str = retrieveGETqs();
-  global_prm = str ? decodeURIComponent(str) : '';
+  // Do not decodeURIComponent the whole query string: %26 / %3D inside a value
+  // turn into separators and break the parameters, and a bare % in the URL
+  // (e.g. ?q=100%) throws URIError, which halts this IIFE so that even mark_*
+  // stops being applied. URLSearchParams decodes per value, so it is not needed.
+  global_prm = str ? str : '';
   global_prm_val = new URLSearchParams(global_prm);
 
   if ((typeof sessionStorage !== 'undefined') & (typeof localStorage !== 'undefined')) {
@@ -105,8 +175,10 @@ function secdomain(p) {
       ls.removeItem('ovicecom_sFirstRef');
       ls.removeItem('ovicecom_sLastRef');
       ls.removeItem('ovicecom_attribution');
+      ls.removeItem(ads_store);
       return;
     }
+    storeAdsParams(global_prm_val);
     if (r === '') {
       r = msuid_direct;
     } else {
@@ -145,33 +217,30 @@ $(function(){
       var p = false;
       if(typeof localStorage !== 'undefined') {
         var s = localStorage;
-        if (target_url.includes(url_form_trial)) {
+        var is_trial = target_url.includes(url_form_trial);
+        var is_form = is_trial || target_url.includes(url_form_sf) || target_url.includes(url_form_ovice);
+        if (is_form) {
           if (s.getItem('ovicecom_attribution')) {
-            at = 'mp=' + s.getItem('ovicecom_cPages') + '&mv=' + s.getItem('ovicecom_cVisits') + '&mf=' + s.getItem('ovicecom_sFirstRef') + '&ms=' + s.getItem('ovicecom_attribution');
-            if (global_prm) {
-              global_prm = global_prm + '&' + at;
+            if (is_trial) {
+              at = 'mp=' + s.getItem('ovicecom_cPages') + '&mv=' + s.getItem('ovicecom_cVisits') + '&mf=' + s.getItem('ovicecom_sFirstRef') + '&ms=' + s.getItem('ovicecom_attribution');
             } else {
-              global_prm = at;
+              at = 'mark_pages=' + s.getItem('ovicecom_cPages') + '&mark_visits=' + s.getItem('ovicecom_cVisits') + '&mark_first=' + s.getItem('ovicecom_sFirstRef') + '&mark_source=' + s.getItem('ovicecom_attribution');
             }
             p = true;
           }
-        } else if (target_url.includes(url_form_sf) || target_url.includes(url_form_ovice)) {
-          if (s.getItem('ovicecom_attribution')) {
-            at = 'mark_pages=' + s.getItem('ovicecom_cPages') + '&mark_visits=' + s.getItem('ovicecom_cVisits') + '&mark_first=' + s.getItem('ovicecom_sFirstRef') + '&mark_source=' + s.getItem('ovicecom_attribution');
-            if (global_prm) {
-              global_prm = global_prm + '&' + at;
-            } else {
-              global_prm = at;
-            }
+          var ads = retrieveAdsParams();
+          if (ads) {
+            at = at ? at + '&' + ads : ads;
             p = true;
           }
         }
       }
       if (p) {
+        var qs = global_prm ? global_prm + '&' + at : at;
         if (target_url.indexOf('?') != -1) {
-          $(this).attr('href', target_url + '&' + global_prm);
+          $(this).attr('href', target_url + '&' + qs);
         } else {
-          $(this).attr('href', target_url + '?' + global_prm);
+          $(this).attr('href', target_url + '?' + qs);
         }
       }
     }
