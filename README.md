@@ -17,7 +17,7 @@ already loads.
 Through jsDelivr, from a tag in this repository:
 
 ```html
-<script src='https://cdn.jsdelivr.net/gh/oviceinc/website-utils@037/utils.js'></script>
+<script src='https://cdn.jsdelivr.net/gh/oviceinc/website-utils@038/utils.js'></script>
 ```
 
 The reference lives in the website's custom code and is updated at release time.
