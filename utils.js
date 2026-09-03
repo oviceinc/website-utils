@@ -1,8 +1,13 @@
-// ovice utils build 037
+// ovice utils build 038
 // builds up to 036 by Tok@ovice, 2024-2026
 // build 037: persist utm_* / gclid in localStorage so they survive navigation
 //            within the site, and stop mutating global_prm in the click handler
-var global_utils = 37;
+// build 038: honour an explicit source / mark_source in the URL even when the
+//            referrer shares the second-level domain. Links placed on
+//            app.ovice.com (the product) point at www.ovice.com, so secdomain()
+//            matched and the visit was treated as internal navigation, which
+//            discarded the MSUID the link had spelled out.
+var global_utils = 38;
 var global_prm;
 var global_prm_val;
 const msuid_direct = 'dir_na_non';
@@ -194,7 +199,20 @@ function secdomain(p) {
       var cd = secdomain(location.origin);
       if (rd === cd) {ft = true;}
     }
-    if((ss.getItem('ovicecom_fEntry') === null) && (ft === false)) {
+    // An explicit source / mark_source in the URL outranks the same-site guess.
+    // Two conditions keep this narrow. An empty value is not a statement of
+    // origin, so it must not open the branch: taking it would store '' and wipe
+    // mark_* off every form link. And the referrer has to come from a different
+    // host, so that www -> www in a new tab stays internal navigation and an
+    // internal link carrying mark_source cannot inflate the visit count.
+    // The precedence below mirrors the source / mark_source order used inside
+    // the branch; reading them in the other order would let ?source= (empty)
+    // pass this test and then win the assignment.
+    var fp = global_prm_val.get('source');
+    if (fp === null) {fp = global_prm_val.get('mark_source');}
+    var forced = (fp !== null) && (fp !== '') && (ft === true) &&
+                 (new URL(r).hostname !== new URL(location.origin).hostname);
+    if((ss.getItem('ovicecom_fEntry') === null) && ((ft === false) || forced)) {
       ss.setItem('ovicecom_fEntry', 1);
       var v = Number(ls.getItem('ovicecom_cVisits'));
       ls.setItem('ovicecom_cVisits', v + 1);

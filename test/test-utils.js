@@ -41,8 +41,9 @@ function makeFullStorage() {
 }
 
 // 1ページ読み込みをシミュレートする。ls は呼び出し間で共有＝サイト内回遊を再現
-function loadPage({ ls, search, referrer, origin }) {
-  const ss = makeStorage();
+function loadPage({ ls, ss, search, referrer, origin }) {
+  // ss を渡すと同一タブでの続きのページを表現できる。省略時は新しいタブ。
+  ss = ss || makeStorage();
   let readyFn = null;
   let clickHandler = null;
 
@@ -388,6 +389,89 @@ console.log('\n[17] フォームリンクが既存クエリを持つ');
   check('重複なし', Object.keys(dup).length === 0, JSON.stringify(dup));
   check('? が二重にならない', (url.match(/\?/g) || []).length === 1, url);
 }
+
+// ============================================================
+// build 038 で追加: プロダクト面(app.ovice.com)からの導線
+// 037 では [18] と [23] が落ちる。それが今回直した内容。
+// ============================================================
+const WWW = 'https://www.ovice.com';
+const APP = 'https://app.ovice.com/ws/demo-space/@pos-qdlzvlt';
+const GOOGLE = 'https://www.google.com/';
+
+// --- ケース18: app → www に mark_source 明示で着地（本命） ---
+console.log('');
+console.log('[18] Google訪問済みの人が別タブで app → www?mark_source=own_ov_dem');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  const pg = loadPage({ ls, search: '?lp_type=jp_tour_seminar_banner&mark_source=own_ov_dem&utm_source=ovice', referrer: APP, origin: WWW });
+  check('sLastRef が own_ov_dem', ls.getItem('ovicecom_sLastRef') === 'own_ov_dem', ls.getItem('ovicecom_sLastRef'));
+  check('cVisits が 2', ls.getItem('ovicecom_cVisits') === '2', ls.getItem('ovicecom_cVisits'));
+  check('sFirstRef は上書きされない', ls.getItem('ovicecom_sFirstRef') === 'seo_go_sea', ls.getItem('ovicecom_sFirstRef'));
+  const { p } = paramsOf(pg.click(SF));
+  check('フォームURLの mark_source が own_ov_dem', p.mark_source === 'own_ov_dem', JSON.stringify(p));
+}
+
+// --- ケース19: 同一タブでは直らない（既知の残存制約を明文化） ---
+console.log('');
+console.log('[19] 同一タブで Google → www → app → www?mark_source（直らないことの確認）');
+{
+  const ls = makeStorage();
+  const ss = makeStorage();
+  loadPage({ ls, ss, search: '', referrer: GOOGLE, origin: WWW });
+  loadPage({ ls, ss, search: '?mark_source=own_ov_dem', referrer: APP, origin: WWW });
+  check('fEntry が立っていれば従来どおり', ls.getItem('ovicecom_sLastRef') === 'seo_go_sea', ls.getItem('ovicecom_sLastRef'));
+  check('cVisits も増えない', ls.getItem('ovicecom_cVisits') === '1', ls.getItem('ovicecom_cVisits'));
+}
+
+// --- ケース20: 空値の ?source= で mark_* を落とさない ---
+console.log('');
+console.log('[20] app → www?source=（空値）');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  const pg = loadPage({ ls, search: '?source=', referrer: APP, origin: WWW });
+  check('sLastRef が空にならない', ls.getItem('ovicecom_sLastRef') === 'seo_go_sea', ls.getItem('ovicecom_sLastRef'));
+  const { p } = paramsOf(pg.click(SF));
+  check('mark_source がフォームURLから消えない', p.mark_source === 'seo_go_sea', JSON.stringify(p));
+}
+
+// --- ケース21: www → www の新規タブでは訪問扱いにしない ---
+console.log('');
+console.log('[21] www → www を新規タブで開き mark_source が付いている');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  loadPage({ ls, search: '?mark_source=own_ov_dem', referrer: WWW + '/ja/pricing', origin: WWW });
+  check('cVisits が増えない', ls.getItem('ovicecom_cVisits') === '1', ls.getItem('ovicecom_cVisits'));
+  check('attribution が上書きされない', ls.getItem('ovicecom_sLastRef') === 'seo_go_sea', ls.getItem('ovicecom_sLastRef'));
+}
+
+// --- ケース22: 広告流入の回帰（二重カウントしない） ---
+console.log('');
+console.log('[22] 広告着地 → サイト内回遊');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '?mark_source=sea_go_bra&utm_source=google&utm_medium=sea', referrer: GOOGLE, origin: WWW });
+  check('広告着地で sLastRef=sea_go_bra', ls.getItem('ovicecom_sLastRef') === 'sea_go_bra', ls.getItem('ovicecom_sLastRef'));
+  loadPage({ ls, search: '', referrer: WWW + '/ja', origin: WWW });
+  check('回遊で cVisits が増えない', ls.getItem('ovicecom_cVisits') === '1', ls.getItem('ovicecom_cVisits'));
+  check('回遊で attribution が変わらない', ls.getItem('ovicecom_sLastRef') === 'sea_go_bra', ls.getItem('ovicecom_sLastRef'));
+}
+
+// --- ケース23: 初回訪問者が app 経由で着地（mark_source=null の解消） ---
+console.log('');
+console.log('[23] 初回訪問者が app → www?mark_source=own_ov_dem');
+{
+  const ls = makeStorage();
+  const pg = loadPage({ ls, search: '?mark_source=own_ov_dem', referrer: APP, origin: WWW });
+  check('sLastRef が own_ov_dem', ls.getItem('ovicecom_sLastRef') === 'own_ov_dem', ls.getItem('ovicecom_sLastRef'));
+  check('cVisits が 1', ls.getItem('ovicecom_cVisits') === '1', ls.getItem('ovicecom_cVisits'));
+  check('sFirstRef が ref_ov_art', ls.getItem('ovicecom_sFirstRef') === 'ref_ov_art', ls.getItem('ovicecom_sFirstRef'));
+  const { p } = paramsOf(pg.click(SF));
+  check('mark_source が null にならない', p.mark_source === 'own_ov_dem', JSON.stringify(p));
+}
+
 
 console.log('\n=== 結果: ' + pass + ' passed, ' + fail + ' failed ===');
 process.exit(fail === 0 ? 0 : 1);
