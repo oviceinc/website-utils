@@ -110,6 +110,12 @@ This is intended for testing.
 
 ## Notes on behaviour
 
+- A visit with no referrer and no `source` / `mark_source` parameter is direct
+  (`dir_na_non`). Since build 039 it does **not** replace a non-direct source remembered
+  from a visit within the last 90 days (`direct_keep_ttl`), the same last non-direct click
+  rule GA4 applies. `ovicecom_sFirstRef` is resolved by the same rule as
+  `ovicecom_sLastRef`, so an ad click records the explicit `mark_source` as the first
+  touch rather than the search engine it came through.
 - `utm_*` values are replaced as a set. If any `utm_*` parameter arrives, all five are
   replaced, so values from different campaigns are never mixed. `gclid` is independent.
   The flip side: tagging an **internal** link with only part of a set (say

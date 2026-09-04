@@ -467,9 +467,99 @@ console.log('[23] 初回訪問者が app → www?mark_source=own_ov_dem');
   const pg = loadPage({ ls, search: '?mark_source=own_ov_dem', referrer: APP, origin: WWW });
   check('sLastRef が own_ov_dem', ls.getItem('ovicecom_sLastRef') === 'own_ov_dem', ls.getItem('ovicecom_sLastRef'));
   check('cVisits が 1', ls.getItem('ovicecom_cVisits') === '1', ls.getItem('ovicecom_cVisits'));
-  check('sFirstRef が ref_ov_art', ls.getItem('ovicecom_sFirstRef') === 'ref_ov_art', ls.getItem('ovicecom_sFirstRef'));
+  // 038 までは referrer(app.ovice.com) から ref_ov_art。039 からは明示された mark_source を first にも使う
+  check('sFirstRef が own_ov_dem（038 では ref_ov_art）', ls.getItem('ovicecom_sFirstRef') === 'own_ov_dem', ls.getItem('ovicecom_sFirstRef'));
   const { p } = paramsOf(pg.click(SF));
   check('mark_source が null にならない', p.mark_source === 'own_ov_dem', JSON.stringify(p));
+}
+
+// ============================================================
+// build 039 で追加: first touch の直接判定 / last non-direct / refdata
+// 038 では [23] の sFirstRef と [24]〜[29] が落ちる。
+// ============================================================
+const DAY = 24 * 60 * 60 * 1000;
+
+// --- ケース24: 初回訪問が直接（referrer なし） ---
+console.log('');
+console.log('[24] 初回訪問が直接 → sFirstRef は dir_na_non（038 では ref_ot_art）');
+{
+  const ls = makeStorage();
+  const pg = loadPage({ ls, search: '', referrer: '', origin: WWW });
+  check('sFirstRef が dir_na_non', ls.getItem('ovicecom_sFirstRef') === 'dir_na_non', ls.getItem('ovicecom_sFirstRef'));
+  check('sLastRef が dir_na_non', ls.getItem('ovicecom_sLastRef') === 'dir_na_non', ls.getItem('ovicecom_sLastRef'));
+  const { p } = paramsOf(pg.click(TRIAL));
+  check('mf=dir_na_non', p.mf === 'dir_na_non', JSON.stringify(p));
+  check('ms=dir_na_non', p.ms === 'dir_na_non', JSON.stringify(p));
+}
+
+// --- ケース25: 広告クリックは first にも mark_source を残す ---
+console.log('');
+console.log('[25] 初回が広告（referrer google + mark_source=sea_go_bra）');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '?mark_source=sea_go_bra&utm_source=google&utm_medium=sea', referrer: GOOGLE, origin: WWW });
+  check('sFirstRef が sea_go_bra（038 では seo_go_sea）', ls.getItem('ovicecom_sFirstRef') === 'sea_go_bra', ls.getItem('ovicecom_sFirstRef'));
+  check('sLastRef が sea_go_bra', ls.getItem('ovicecom_sLastRef') === 'sea_go_bra', ls.getItem('ovicecom_sLastRef'));
+}
+
+// --- ケース26: 自然検索で来た人が後日 URL 直打ちで再訪（last non-direct） ---
+console.log('');
+console.log('[26] Google → 10日後に直接再訪');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  ls.setItem('ovicecom_nLastTime', String(Date.now() - 10 * DAY));
+  const pg = loadPage({ ls, search: '', referrer: '', origin: WWW });
+  check('sLastRef は seo_go_sea のまま', ls.getItem('ovicecom_sLastRef') === 'seo_go_sea', ls.getItem('ovicecom_sLastRef'));
+  check('cVisits は 2 に増える', ls.getItem('ovicecom_cVisits') === '2', ls.getItem('ovicecom_cVisits'));
+  check('sFirstRef は seo_go_sea', ls.getItem('ovicecom_sFirstRef') === 'seo_go_sea', ls.getItem('ovicecom_sFirstRef'));
+  const { p } = paramsOf(pg.click(TRIAL));
+  check('ms=seo_go_sea', p.ms === 'seo_go_sea', JSON.stringify(p));
+}
+
+// --- ケース27: 保持期限を過ぎた直接再訪は direct に戻る ---
+console.log('');
+console.log('[27] Google → 91日後に直接再訪');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  ls.setItem('ovicecom_nLastTime', String(Date.now() - 91 * DAY));
+  loadPage({ ls, search: '', referrer: '', origin: WWW });
+  check('sLastRef が dir_na_non', ls.getItem('ovicecom_sLastRef') === 'dir_na_non', ls.getItem('ovicecom_sLastRef'));
+  check('sFirstRef は seo_go_sea のまま', ls.getItem('ovicecom_sFirstRef') === 'seo_go_sea', ls.getItem('ovicecom_sFirstRef'));
+}
+
+// --- ケース28: 直接再訪後に別の流入元で来れば上書きされる（非直接は従来どおり） ---
+console.log('');
+console.log('[28] Google → 直接 → Bing');
+{
+  const ls = makeStorage();
+  loadPage({ ls, search: '', referrer: GOOGLE, origin: WWW });
+  loadPage({ ls, search: '', referrer: '', origin: WWW });
+  loadPage({ ls, search: '', referrer: 'https://www.bing.com/', origin: WWW });
+  check('sLastRef が seo_mi_sea', ls.getItem('ovicecom_sLastRef') === 'seo_mi_sea', ls.getItem('ovicecom_sLastRef'));
+  check('cVisits が 3', ls.getItem('ovicecom_cVisits') === '3', ls.getItem('ovicecom_cVisits'));
+}
+
+// --- ケース29: refdata が Matrix と一致する ---
+console.log('');
+console.log('[29] refdata のラベル（Marketing Source IDs. に存在するコード）');
+{
+  const cases = [
+    ['https://www.linkedin.com/feed/', 'soc_li_pos'],
+    ['https://www.youtube.com/watch?v=x', 'soc_yo_pos'],
+    ['https://www.instagram.com/ovice/', 'soc_ig_pos'],
+    ['https://boxil.jp/service/1/', 'ref_ot_art'],
+    ['https://it-trend.jp/x', 'ref_ot_art'],
+    ['https://www.capterra.jp/x', 'ref_ot_art'],
+    ['https://www.g2.com/x', 'ref_ot_art'],
+    ['https://www.getapp.com/x', 'ref_ot_art'],
+  ];
+  for (const [ref, expect] of cases) {
+    const ls = makeStorage();
+    loadPage({ ls, search: '', referrer: ref, origin: WWW });
+    check(new URL(ref).hostname + ' → ' + expect, ls.getItem('ovicecom_sLastRef') === expect, ls.getItem('ovicecom_sLastRef'));
+  }
 }
 
 

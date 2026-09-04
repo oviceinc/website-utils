@@ -1,4 +1,4 @@
-// ovice utils build 038
+// ovice utils build 039
 // builds up to 036 by Tok@ovice, 2024-2026
 // build 037: persist utm_* / gclid in localStorage so they survive navigation
 //            within the site, and stop mutating global_prm in the click handler
@@ -7,7 +7,18 @@
 //            app.ovice.com (the product) point at www.ovice.com, so secdomain()
 //            matched and the visit was treated as internal navigation, which
 //            discarded the MSUID the link had spelled out.
-var global_utils = 38;
+// build 039: (1) a first visit with no referrer recorded ovicecom_sFirstRef as
+//            'ref_ot_art': checkAttribution() was handed the literal 'dir_na_non'
+//            and fell through to its default. First and last touch now resolve
+//            through one rule, so an explicit source / mark_source (an ad click)
+//            is also what the first touch records instead of the search engine
+//            the click came through. (2) Last non-direct click: a visit with no
+//            referrer and no source parameter no longer replaces a source seen
+//            within direct_keep_ttl, matching how GA4 attributes sessions.
+//            (3) refdata rows realigned with the Marketing Source Parameter
+//            Matrix (LinkedIn / Instagram / YouTube had rotated codes, and the
+//            review sites had drifted off ref_ot_art).
+var global_utils = 39;
 var global_prm;
 var global_prm_val;
 const msuid_direct = 'dir_na_non';
@@ -17,6 +28,8 @@ const url_form_ovice = 'inforea.ch';
 const ads_store = 'ovicecom_sAds';
 const ads_keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
 const ads_ttl = 30 * 24 * 60 * 60 * 1000;
+// How long a remembered non-direct source outranks a later direct visit.
+const direct_keep_ttl = 90 * 24 * 60 * 60 * 1000;
 
 function retrieveGETqs() {
   var query = window.location.search.substring(1);
@@ -92,6 +105,9 @@ function retrieveAdsParams(target_url) {
   return out.join('&');
 }
 
+// Map a referrer URL to an MSUID. Source of truth is the sheet
+// "referrer via utils.js" in the Marketing Source Parameter Matrix; the codes
+// themselves must exist on the sheet "Marketing Source IDs.".
 function checkAttribution(d) {
   const refdata = `[
     {"domain": "google.", "ref": "seo_go_sea"},
@@ -122,12 +138,12 @@ function checkAttribution(d) {
     {"domain": "www.itreview.jp", "ref": "ref_it_art"},
     {"domain": "prtimes.jp", "ref": "ref_pr_art"},
     {"domain": "peatix.com", "ref": "ref_pe_art"},
-    {"domain": "boxil.jp", "ref": "aso_ot_sea"},
-    {"domain": "it-trend.jp", "ref": "ref_ov_art"},
-    {"domain": "capterra.jp", "ref": "ref_fl_art"},
-    {"domain": "capterra.com", "ref": "ref_it_art"},
-    {"domain": "g2.com", "ref": "ref_pr_art"},
-    {"domain": "getapp.com", "ref": "ref_pe_art"},
+    {"domain": "boxil.jp", "ref": "ref_ot_art"},
+    {"domain": "it-trend.jp", "ref": "ref_ot_art"},
+    {"domain": "capterra.jp", "ref": "ref_ot_art"},
+    {"domain": "capterra.com", "ref": "ref_ot_art"},
+    {"domain": "g2.com", "ref": "ref_ot_art"},
+    {"domain": "getapp.com", "ref": "ref_ot_art"},
     {"domain": "wantedly.com", "ref": "ref_ot_art"},
     {"domain": "techable.jp", "ref": "ref_ot_art"},
     {"domain": "zendesk.com", "ref": "ref_ot_art"},
@@ -145,9 +161,9 @@ function checkAttribution(d) {
     {"domain": "l.facebook.com", "ref": "soc_fa_pos"},
     {"domain": "lm.facebook.com", "ref": "soc_fa_pos"},
     {"domain": "x.com", "ref": "soc_x_pos"},
-    {"domain": "linkedin.com", "ref": "soc_ig_pos"},
-    {"domain": "youtube.com", "ref": "soc_in_pos"},
-    {"domain": "instagram.com", "ref": "soc_yo_pos"}
+    {"domain": "linkedin.com", "ref": "soc_li_pos"},
+    {"domain": "youtube.com", "ref": "soc_yo_pos"},
+    {"domain": "instagram.com", "ref": "soc_ig_pos"}
   ]`;
   var j = JSON.parse(refdata);
   for (var i = 0; i < j.length; i++) {
@@ -216,17 +232,27 @@ function secdomain(p) {
       ss.setItem('ovicecom_fEntry', 1);
       var v = Number(ls.getItem('ovicecom_cVisits'));
       ls.setItem('ovicecom_cVisits', v + 1);
-      if (v === 0) {
-        ls.setItem('ovicecom_sFirstRef', checkAttribution(r));
+      // Resolve this visit's source once: an explicit parameter wins, then the
+      // referrer, then direct. `r` is already the literal 'dir_na_non' when the
+      // referrer was empty, and must not be passed to checkAttribution(), whose
+      // default 'ref_ot_art' would otherwise be recorded (this was the first
+      // touch bug up to build 038). An empty parameter value counts as absent.
+      var p = global_prm_val.get('source');
+      if ((p === null) || (p === '')) {p = global_prm_val.get('mark_source');}
+      if ((p === null) || (p === '')) {p = (r === msuid_direct ? r : checkAttribution(r));}
+      // Last non-direct click. A visitor who found the site through search or
+      // an ad and later returns by typing the URL keeps that earlier source, as
+      // long as the previous visit is recent enough to plausibly be the same
+      // decision. ovicecom_nLastTime is stamped on every page load, so at this
+      // point it still holds the previous visit's last activity.
+      if (p === msuid_direct) {
+        var prev = ls.getItem('ovicecom_sLastRef');
+        var seen = Number(ls.getItem('ovicecom_nLastTime'));
+        if (prev && (prev !== msuid_direct) && seen &&
+            ((new Date().getTime() - seen) <= direct_keep_ttl)) {p = prev;}
       }
-      var p;
-      if ((p = global_prm_val.get('source')) !== null) {
-        ls.setItem('ovicecom_sLastRef', p);
-      } else if ((p = global_prm_val.get('mark_source')) !== null) {
-        ls.setItem('ovicecom_sLastRef', p);
-      } else {
-        ls.setItem('ovicecom_sLastRef', (r === msuid_direct ? r : checkAttribution(r)));
-      }
+      if (v === 0) {ls.setItem('ovicecom_sFirstRef', p);}
+      ls.setItem('ovicecom_sLastRef', p);
     }
     var t = new Date();
     ls.setItem('ovicecom_nLastTime', t.getTime());
